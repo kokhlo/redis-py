@@ -158,6 +158,31 @@ def test_discover_master_keeps_failed_sentinel_last(cluster, sentinel, master_ip
 
 
 @pytest.mark.onlynoncluster
+def test_discover_master_rotates_healthy_sentinels_during_quarantine(
+    cluster, master_ip
+):
+    nodes = [("failed", 26379), ("first", 26379), ("second", 26379)]
+    sentinel = Sentinel(nodes)
+    cluster.nodes_down.add(nodes[0])
+    for client in sentinel.sentinels:
+        client.sentinel_masters = mock.Mock(wraps=client.sentinel_masters)
+    clients = {client.id: client for client in sentinel.sentinels}
+
+    # First discovery finds the failed node and promotes the first responder.
+    assert sentinel.discover_master("mymaster") == (master_ip, 6379)
+    for node in nodes[1:]:
+        clients[node].sentinel_masters.reset_mock()
+
+    for _ in range(sentinel.FAILED_SENTINEL_QUARANTINE - 1):
+        assert sentinel.discover_master("mymaster") == (master_ip, 6379)
+
+    assert clients[nodes[0]].sentinel_masters.call_count == 1
+    counts = [clients[node].sentinel_masters.call_count for node in nodes[1:]]
+    assert min(counts) > 0
+    assert abs(counts[0] - counts[1]) <= 1
+
+
+@pytest.mark.onlynoncluster
 def test_discover_master_order_permutes_never_dups(cluster, sentinel, master_ip):
     orders = set()
     for _ in range(10):

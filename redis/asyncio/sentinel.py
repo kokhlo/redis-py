@@ -269,18 +269,19 @@ class Sentinel(AsyncSentinelCommands):
         # single step: rebinding (instead of in-place pop/append/insert) is
         # what keeps a concurrent discovery call - which iterates a snapshot
         # of the old list - from seeing duplicates or losing a sentinel.
-        # - Every sentinel healthy and the head answered: rotate the head to
-        #   the end, so repeated discovery calls spread the load evenly
-        #   across all sentinel nodes instead of always starting from the
-        #   same one.
+        # - If the head answered, rotate it behind the other healthy nodes
+        #   but ahead of quarantined nodes, so discovery stays balanced
+        #   during a partial outage.
         # - A non-head sentinel answered: promote it to the head, preserving
         #   the pre-existing failover fast path of trying it first on the
         #   next call.
-        next_order = [s for s in self.sentinels if s is not sentinel]
-        if sentinel is self.sentinels[0] and not self._failed_sentinels:
-            next_order.append(sentinel)
+        remaining = [s for s in self.sentinels if s is not sentinel]
+        if sentinel is self.sentinels[0]:
+            healthy = [s for s in remaining if s not in self._failed_sentinels]
+            quarantined = [s for s in remaining if s in self._failed_sentinels]
+            next_order = healthy + [sentinel] + quarantined
         else:
-            next_order.insert(0, sentinel)
+            next_order = [sentinel] + remaining
         self.sentinels = next_order
 
     async def execute_command(self, *args, **kwargs):
